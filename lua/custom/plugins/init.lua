@@ -5,4 +5,27 @@
 
 ---@module 'lazy'
 ---@type LazySpec
-return {}
+return {
+  { 'vyfor/cord.nvim' },
+  {
+    'f-person/auto-dark-mode.nvim',
+
+    opts = {
+      update_interval = 1000,
+
+      fallback = 'light',
+
+      set_dark_mode = function()
+        vim.o.background = 'dark'
+
+        require('colors.ziggy').load()
+      end,
+
+      set_light_mode = function()
+        vim.o.background = 'light'
+
+        require('colors.ziggy').load()
+      end,
+    },
+  },
+}
