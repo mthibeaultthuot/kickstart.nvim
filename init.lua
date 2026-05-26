@@ -316,8 +316,10 @@ require('lazy').setup({
 
       -- Document existing key chains
       spec = {
+        { '<leader>b', group = '[B]uffer' },
         { '<leader>s', group = '[S]earch', mode = { 'n', 'v' } },
         { '<leader>t', group = '[T]oggle' },
+        { '<leader>l', group = '[L]SP' },
         { '<leader>h', group = 'Git [H]unk', mode = { 'n', 'v' } }, -- Enable gitsigns recommended keymaps first
         { 'gr', group = 'LSP Actions', mode = { 'n' } },
       },
@@ -358,6 +360,7 @@ require('lazy').setup({
         cond = function() return vim.fn.executable 'make' == 1 end,
       },
       { 'nvim-telescope/telescope-ui-select.nvim' },
+      { 'nvim-telescope/telescope-file-browser.nvim' },
 
       -- Useful for getting pretty icons, but requires a Nerd Font.
       { 'nvim-tree/nvim-web-devicons', enabled = vim.g.have_nerd_font },
@@ -384,6 +387,10 @@ require('lazy').setup({
 
       -- [[ Configure Telescope ]]
       -- See `:help telescope` and `:help telescope.setup()`
+      local actions = require 'telescope.actions'
+      local action_state = require 'telescope.actions.state'
+      local file_browser_actions = require 'telescope._extensions.file_browser.actions'
+
       require('telescope').setup {
         -- You can put your default mappings / updates / etc. in here
         --  All the info you're looking for is in `:help telescope.setup()`
@@ -396,26 +403,162 @@ require('lazy').setup({
         -- pickers = {}
         extensions = {
           ['ui-select'] = { require('telescope.themes').get_dropdown() },
+          file_browser = {
+            grouped = true,
+            hidden = true,
+            hijack_netrw = true,
+            initial_mode = 'normal',
+            mappings = {
+              n = {
+                h = file_browser_actions.goto_parent_dir,
+                l = actions.select_default,
+                c = file_browser_actions.create,
+                r = file_browser_actions.rename,
+                d = file_browser_actions.remove,
+                m = file_browser_actions.move,
+                y = file_browser_actions.copy,
+                ['<C-h>'] = file_browser_actions.toggle_hidden,
+              },
+              i = {
+                ['<A-c>'] = file_browser_actions.create,
+                ['<A-r>'] = file_browser_actions.rename,
+                ['<A-d>'] = file_browser_actions.remove,
+                ['<A-m>'] = file_browser_actions.move,
+                ['<A-y>'] = file_browser_actions.copy,
+              },
+            },
+          },
         },
       }
 
       -- Enable Telescope extensions if they are installed
       pcall(require('telescope').load_extension, 'fzf')
       pcall(require('telescope').load_extension, 'ui-select')
+      pcall(require('telescope').load_extension, 'file_browser')
 
       -- See `:help telescope.builtin`
       local builtin = require 'telescope.builtin'
+      local themes = require 'telescope.themes'
+
+      local function project_root()
+        local path = vim.api.nvim_buf_get_name(0)
+        local start = path ~= '' and path or vim.uv.cwd()
+
+        return vim.fs.root(start, {
+          '.git',
+          'Cargo.toml',
+          'go.mod',
+          'package.json',
+          'pyproject.toml',
+          'Makefile',
+        }) or vim.uv.cwd()
+      end
+
+      local function open_project_files()
+        local root = project_root()
+
+        require('telescope').extensions.file_browser.file_browser(themes.get_dropdown {
+          cwd = root,
+          path = root,
+          grouped = true,
+          hidden = true,
+          initial_mode = 'normal',
+          layout_config = {
+            height = 0.85,
+            width = 0.85,
+          },
+        })
+      end
+
+      local function open_buffers()
+        local function delete_selected_buffers(prompt_bufnr)
+          local picker = action_state.get_current_picker(prompt_bufnr)
+          local selections = picker:get_multi_selection()
+
+          if #selections == 0 then
+            local selection = action_state.get_selected_entry()
+            if selection then selections = { selection } end
+          end
+
+          local buffers = vim
+            .iter(selections)
+            :map(function(selection) return selection.bufnr end)
+            :filter(function(bufnr) return bufnr and vim.api.nvim_buf_is_valid(bufnr) end)
+            :totable()
+
+          actions.close(prompt_bufnr)
+
+          local failed = 0
+          for _, bufnr in ipairs(buffers) do
+            local ok = pcall(vim.api.nvim_buf_delete, bufnr, { force = false })
+            if not ok then failed = failed + 1 end
+          end
+
+          if failed > 0 then vim.notify('Could not delete ' .. failed .. ' modified buffer(s)', vim.log.levels.WARN) end
+        end
+
+        builtin.buffers(themes.get_dropdown {
+          sort_mru = true,
+          ignore_current_buffer = false,
+          initial_mode = 'normal',
+          attach_mappings = function(_, map)
+            map('n', 'd', actions.delete_buffer)
+            map('n', 'D', delete_selected_buffers)
+            map('i', '<C-d>', actions.delete_buffer)
+            map('i', '<C-x>', delete_selected_buffers)
+            return true
+          end,
+        })
+      end
+
+      local function buffer_for_telescope_entry(entry)
+        local path = entry and (entry.path or entry.filename or entry.value)
+        if type(path) == 'table' then path = path.filename or path.path end
+        if type(path) ~= 'string' or path == '' then return nil end
+
+        local absolute_path = vim.fs.normalize(vim.fn.fnamemodify(path, ':p'))
+        for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+          local name = vim.api.nvim_buf_get_name(bufnr)
+          if name ~= '' and vim.fs.normalize(vim.fn.fnamemodify(name, ':p')) == absolute_path then return bufnr end
+        end
+      end
+
+      local function delete_selected_entry_buffer(prompt_bufnr)
+        local bufnr = buffer_for_telescope_entry(action_state.get_selected_entry())
+        if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+          vim.notify('Selected result is not an open buffer', vim.log.levels.INFO)
+          return
+        end
+
+        local ok = pcall(vim.api.nvim_buf_delete, bufnr, { force = false })
+        if not ok then vim.notify('Could not delete modified buffer', vim.log.levels.WARN) end
+      end
+
+      local function grep_mappings()
+        return {
+          attach_mappings = function(_, map)
+            map('n', 'd', delete_selected_entry_buffer)
+            map('i', '<C-d>', delete_selected_entry_buffer)
+            return true
+          end,
+        }
+      end
+
       vim.keymap.set('n', '<leader>sh', builtin.help_tags, { desc = '[S]earch [H]elp' })
       vim.keymap.set('n', '<leader>sk', builtin.keymaps, { desc = '[S]earch [K]eymaps' })
-      vim.keymap.set('n', '<leader>sf', builtin.find_files, { desc = '[S]earch [F]iles' })
+      vim.keymap.set('n', '<leader>sf', open_project_files, { desc = '[S]earch [F]iles in explorer' })
+      vim.keymap.set('n', '<leader>sF', builtin.find_files, { desc = '[S]earch [F]iles by name' })
       vim.keymap.set('n', '<leader>ss', builtin.builtin, { desc = '[S]earch [S]elect Telescope' })
-      vim.keymap.set({ 'n', 'v' }, '<leader>sw', builtin.grep_string, { desc = '[S]earch current [W]ord' })
-      vim.keymap.set('n', '<leader>sg', builtin.live_grep, { desc = '[S]earch by [G]rep' })
+      vim.keymap.set({ 'n', 'v' }, '<leader>sw', function() builtin.grep_string(grep_mappings()) end, { desc = '[S]earch current [W]ord' })
+      vim.keymap.set('n', '<leader>sg', function() builtin.live_grep(grep_mappings()) end, { desc = '[S]earch by [G]rep' })
       vim.keymap.set('n', '<leader>sd', builtin.diagnostics, { desc = '[S]earch [D]iagnostics' })
       vim.keymap.set('n', '<leader>sr', builtin.resume, { desc = '[S]earch [R]esume' })
       vim.keymap.set('n', '<leader>s.', builtin.oldfiles, { desc = '[S]earch Recent Files ("." for repeat)' })
       vim.keymap.set('n', '<leader>sc', builtin.commands, { desc = '[S]earch [C]ommands' })
-      vim.keymap.set('n', '<leader><leader>', builtin.buffers, { desc = '[ ] Find existing buffers' })
+      vim.keymap.set('n', '<leader>bb', open_buffers, { desc = '[B]uffer [B]rowse open buffers' })
+      vim.keymap.set('n', '<leader>bp', '<C-^>', { desc = '[B]uffer [P]revious buffer' })
+      vim.keymap.set('n', '<leader><leader>', open_buffers, { desc = '[ ] Find existing buffers' })
+      vim.api.nvim_create_user_command('ProjectFiles', open_project_files, { desc = 'Open project file explorer' })
 
       -- This runs on LSP attach per buffer (see main LSP attach function in 'neovim/nvim-lspconfig' config for more info,
       -- it is better explained there). This allows easily switching between pickers if you prefer using something else!
@@ -544,6 +687,27 @@ require('lazy').setup({
             vim.keymap.set(mode, keys, func, { buffer = event.buf, desc = 'LSP: ' .. desc })
           end
 
+          local function telescope_or_lsp(telescope_picker, lsp_fallback, opts)
+            return function()
+              local ok, builtin = pcall(require, 'telescope.builtin')
+              if ok and builtin[telescope_picker] then
+                builtin[telescope_picker](vim.tbl_extend('force', { bufnr = event.buf, reuse_win = true }, opts or {}))
+              elseif lsp_fallback then
+                lsp_fallback()
+              else
+                vim.notify('No fallback available for ' .. telescope_picker, vim.log.levels.WARN)
+              end
+            end
+          end
+
+          map('gd', telescope_or_lsp('lsp_definitions', vim.lsp.buf.definition), '[G]oto [D]efinition')
+          map('gD', vim.lsp.buf.declaration, '[G]oto [D]eclaration')
+          map('gi', telescope_or_lsp('lsp_implementations', vim.lsp.buf.implementation), '[G]oto [I]mplementation')
+          map('gr', telescope_or_lsp('lsp_references', vim.lsp.buf.references), '[G]oto [R]eferences')
+          map('gy', telescope_or_lsp('lsp_type_definitions', vim.lsp.buf.type_definition), '[G]oto T[y]pe Definition')
+          map('K', vim.lsp.buf.hover, 'Hover Documentation')
+          map('gK', vim.lsp.buf.signature_help, 'Signature Documentation')
+
           -- Rename the variable under your cursor.
           --  Most Language Servers support renaming across files, etc.
           map('grn', vim.lsp.buf.rename, '[R]e[n]ame')
@@ -555,6 +719,12 @@ require('lazy').setup({
           -- WARN: This is not Goto Definition, this is Goto Declaration.
           --  For example, in C this would take you to the header.
           map('grD', vim.lsp.buf.declaration, '[G]oto [D]eclaration')
+
+          map('<leader>lc', telescope_or_lsp('lsp_incoming_calls', vim.lsp.buf.incoming_calls), 'Incoming [C]alls')
+          map('<leader>lC', telescope_or_lsp('lsp_outgoing_calls', vim.lsp.buf.outgoing_calls), 'Outgoing [C]alls')
+          map('<leader>ls', telescope_or_lsp('lsp_document_symbols', vim.lsp.buf.document_symbol), 'Document [S]ymbols')
+          map('<leader>lS', telescope_or_lsp('lsp_dynamic_workspace_symbols', vim.lsp.buf.workspace_symbol), 'Workspace [S]ymbols')
+          map('<leader>ld', vim.diagnostic.open_float, 'Line [D]iagnostic')
 
           -- The following two autocommands are used to highlight references of the
           -- word under your cursor when your cursor rests there for a little while.
@@ -599,6 +769,26 @@ require('lazy').setup({
       --  Feel free to add/remove any LSPs that you want here. They will automatically be installed.
       --  See `:help lsp-config` for information about keys and how to configure
       ---@type table<string, vim.lsp.Config>
+      local vue_language_server_path = vim.fn.stdpath 'data' .. '/mason/packages/vue-language-server/node_modules/@vue/language-server'
+      local vue_typescript_server_path = vim.fn.stdpath 'data' .. '/mason/packages/vue-language-server/node_modules/typescript/lib'
+      local vue_typescript_plugin = {
+        name = '@vue/typescript-plugin',
+        location = vue_language_server_path,
+        languages = { 'vue' },
+        configNamespace = 'typescript',
+        enableForWorkspaceTypeScriptVersions = true,
+      }
+
+      local ts_inlay_hints = {
+        includeInlayEnumMemberValueHints = true,
+        includeInlayFunctionLikeReturnTypeHints = true,
+        includeInlayFunctionParameterTypeHints = true,
+        includeInlayParameterNameHints = 'literals',
+        includeInlayParameterNameHintsWhenArgumentMatchesName = false,
+        includeInlayPropertyDeclarationTypeHints = true,
+        includeInlayVariableTypeHints = false,
+      }
+
       local servers = {
         -- clangd = {},
         -- gopls = {},
@@ -612,6 +802,58 @@ require('lazy').setup({
         -- ts_ls = {},
 
         stylua = {}, -- Used to format Lua code
+
+        vtsls = {
+          filetypes = { 'javascript', 'javascriptreact', 'typescript', 'typescriptreact', 'vue' },
+          settings = {
+            vtsls = {
+              autoUseWorkspaceTsdk = true,
+              tsserver = {
+                globalPlugins = {
+                  vue_typescript_plugin,
+                },
+              },
+            },
+            javascript = {
+              inlayHints = ts_inlay_hints,
+              preferences = {
+                importModuleSpecifier = 'non-relative',
+                includePackageJsonAutoImports = 'auto',
+              },
+            },
+            typescript = {
+              inlayHints = ts_inlay_hints,
+              preferences = {
+                importModuleSpecifier = 'non-relative',
+                includePackageJsonAutoImports = 'auto',
+              },
+            },
+          },
+        },
+        vue_ls = {
+          init_options = {
+            typescript = {
+              tsdk = vue_typescript_server_path,
+            },
+          },
+        },
+        svelte = {},
+        eslint = {},
+        emmet_language_server = {
+          filetypes = {
+            'css',
+            'eruby',
+            'html',
+            'javascriptreact',
+            'less',
+            'sass',
+            'scss',
+            'svelte',
+            'typescriptreact',
+            'vue',
+          },
+        },
+        tailwindcss = {},
 
         -- Special Lua Config, as recommended by neovim help docs
         lua_ls = {
@@ -658,6 +900,10 @@ require('lazy').setup({
       local ensure_installed = vim.tbl_keys(servers or {})
       vim.list_extend(ensure_installed, {
         -- You can add other tools here that you want Mason to install
+        'rust-analyzer',
+        'codelldb',
+        'prettierd',
+        'prettier',
       })
 
       require('mason-tool-installer').setup { ensure_installed = ensure_installed }
@@ -676,7 +922,13 @@ require('lazy').setup({
     keys = {
       {
         '<leader>f',
-        function() require('conform').format { async = true } end,
+        function()
+          require('conform').format {
+            async = true,
+            lsp_format = 'fallback',
+            timeout_ms = 3000,
+          }
+        end,
         mode = '',
         desc = '[F]ormat buffer',
       },
@@ -684,7 +936,7 @@ require('lazy').setup({
     ---@module 'conform'
     ---@type conform.setupOpts
     opts = {
-      notify_on_error = false,
+      notify_on_error = true,
       format_on_save = function(bufnr)
         -- You can specify filetypes to autoformat on save here:
         local enabled_filetypes = {
@@ -702,7 +954,18 @@ require('lazy').setup({
       },
       -- You can also specify external formatters in here.
       formatters_by_ft = {
-        -- rust = { 'rustfmt' },
+        rust = { 'rustfmt', lsp_format = 'fallback' },
+        javascript = { 'prettierd', 'prettier', stop_after_first = true },
+        javascriptreact = { 'prettierd', 'prettier', stop_after_first = true },
+        typescript = { 'prettierd', 'prettier', stop_after_first = true },
+        typescriptreact = { 'prettierd', 'prettier', stop_after_first = true },
+        vue = { 'prettierd', 'prettier', stop_after_first = true },
+        svelte = { 'prettierd', 'prettier', stop_after_first = true },
+        css = { 'prettierd', 'prettier', stop_after_first = true },
+        scss = { 'prettierd', 'prettier', stop_after_first = true },
+        html = { 'prettierd', 'prettier', stop_after_first = true },
+        json = { 'prettierd', 'prettier', stop_after_first = true },
+        jsonc = { 'prettierd', 'prettier', stop_after_first = true },
         -- Conform can also run multiple formatters sequentially
         -- python = { "isort", "black" },
         --
