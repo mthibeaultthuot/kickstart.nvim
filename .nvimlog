@@ -5,3 +5,6 @@ WRN 2026-05-26T14:04:17.762 ?.15684    server_start:199: Failed to start server:
 WRN 2026-05-26T14:04:30.896 ?.16037    server_start:199: Failed to start server: operation not permitted: /var/folders/x6/snlxxf89615b6t4d7x_6fpr00000gn/T/nvim.mtt/RGAsFX/nvim.16037.0
 WRN 2026-05-26T14:06:11.423 ?.18533    server_start:199: Failed to start server: operation not permitted: /var/folders/x6/snlxxf89615b6t4d7x_6fpr00000gn/T/nvim.mtt/xjahVX/nvim.18533.0
 WRN 2026-05-26T14:07:10.987 ?.19505    server_start:199: Failed to start server: operation not permitted: /var/folders/x6/snlxxf89615b6t4d7x_6fpr00000gn/T/nvim.mtt/PUiJIu/nvim.19505.0
+WRN 2026-06-02T19:08:30.371 ?.32317    server_start:199: Failed to start server: operation not permitted: /var/folders/x6/snlxxf89615b6t4d7x_6fpr00000gn/T/nvim.mtt/EepuFE/nvim.32317.0
+WRN 2026-06-02T19:08:35.069 ?.32384    server_start:199: Failed to start server: operation not permitted: /var/folders/x6/snlxxf89615b6t4d7x_6fpr00000gn/T/nvim.mtt/Qm9EC8/nvim.32384.0
+WRN 2026-06-02T19:13:19.986 ?.35802    server_start:199: Failed to start server: operation not permitted: /var/folders/x6/snlxxf89615b6t4d7x_6fpr00000gn/T/nvim.mtt/AzBMfo/nvim.35802.0

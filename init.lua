@@ -106,6 +106,16 @@ vim.o.number = true
 
 -- Enable mouse mode, can be useful for resizing splits for example!
 vim.o.mouse = 'a'
+vim.keymap.set({ 'n', 'i', 'v', 'x', 's', 'o' }, '<2-LeftMouse>', function()
+  local pos = vim.fn.getmousepos()
+  if pos.winid == 0 or pos.line == 0 or pos.column == 0 then return end
+
+  pcall(vim.api.nvim_set_current_win, pos.winid)
+  pcall(vim.api.nvim_win_set_cursor, pos.winid, { pos.line, pos.column - 1 })
+  vim.cmd.normal { 'viw', bang = true }
+end, { desc = 'Select word on double-click without opening menus' })
+vim.keymap.set({ 'n', 'i', 'v', 'x', 's', 'o' }, '<3-LeftMouse>', '<Nop>', { desc = 'Disable triple-click mouse action' })
+vim.keymap.set({ 'n', 'i', 'v', 'x', 's', 'o' }, '<4-LeftMouse>', '<Nop>', { desc = 'Disable quad-click mouse action' })
 
 -- Don't show the mode, since it's already in the status line
 vim.o.showmode = false
@@ -390,6 +400,7 @@ require('lazy').setup({
       local actions = require 'telescope.actions'
       local action_state = require 'telescope.actions.state'
       local file_browser_actions = require 'telescope._extensions.file_browser.actions'
+      local file_browser_utils = require 'telescope._extensions.file_browser.utils'
 
       require('telescope').setup {
         -- You can put your default mappings / updates / etc. in here
@@ -454,12 +465,52 @@ require('lazy').setup({
         }) or vim.uv.cwd()
       end
 
+      local last_project_files_path
+
+      local function directory_exists(path)
+        return type(path) == 'string' and path ~= '' and vim.fn.isdirectory(path) == 1
+      end
+
+      local function remember_project_files_path(prompt_bufnr)
+        local ok, picker = pcall(action_state.get_current_picker, prompt_bufnr)
+        local path = ok and picker.finder and picker.finder.path
+        if directory_exists(path) then last_project_files_path = vim.fs.normalize(path) end
+      end
+
       local function open_project_files()
         local root = project_root()
+        local path = directory_exists(last_project_files_path) and last_project_files_path or root
+
+        local function reset_project_files_path(prompt_bufnr)
+          last_project_files_path = nil
+
+          local picker = action_state.get_current_picker(prompt_bufnr)
+          local finder = picker.finder
+          finder.files = true
+          finder.path = root
+          file_browser_utils.redraw_border_title(picker)
+          picker:refresh(finder, {
+            new_prefix = file_browser_utils.relative_path_prefix(finder),
+            reset_prompt = true,
+            multi = picker._multi,
+          })
+          vim.notify('Telescope file browser path reset to project root', vim.log.levels.INFO)
+        end
+
+        local function select_project_files_entry(prompt_bufnr)
+          local entry = action_state.get_selected_entry()
+          if entry and file_browser_utils.is_dir(entry.Path) then
+            file_browser_actions.open_dir(prompt_bufnr)
+            remember_project_files_path(prompt_bufnr)
+            return
+          end
+
+          actions.select_default(prompt_bufnr)
+        end
 
         require('telescope').extensions.file_browser.file_browser(themes.get_dropdown {
           cwd = root,
-          path = root,
+          path = path,
           grouped = true,
           hidden = true,
           initial_mode = 'normal',
@@ -467,6 +518,19 @@ require('lazy').setup({
             height = 0.85,
             width = 0.85,
           },
+          attach_mappings = function(_, map)
+            map('n', 'h', function(prompt_bufnr)
+              file_browser_actions.goto_parent_dir(prompt_bufnr)
+              remember_project_files_path(prompt_bufnr)
+            end)
+
+            map('n', 'l', select_project_files_entry)
+            map('n', '<CR>', select_project_files_entry)
+            map('i', '<CR>', select_project_files_entry)
+            map('n', 'C', reset_project_files_path)
+            map('i', '<A-C>', reset_project_files_path)
+            return true
+          end,
         })
       end
 
